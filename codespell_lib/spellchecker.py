@@ -15,7 +15,7 @@
 Copyright (C) 2010-2011  Lucas De Marchi <lucas.de.marchi@gmail.com>
 Copyright (C) 2011  ProFUSION embedded systems
 """
-from typing import Dict, Set
+from typing import Dict, Set, Sequence
 
 # Pass all misspellings through this translation table to generate
 # alternative misspellings and fixes.
@@ -23,8 +23,8 @@ alt_chars = (("'", "’"),)  # noqa: RUF001
 
 
 class Misspelling:
-    def __init__(self, data: str, fix: bool, reason: str) -> None:
-        self.data = data
+    def __init__(self, candidates: Sequence[str], fix: bool, reason: str) -> None:
+        self.candidates = candidates
         self.fix = fix
         self.reason = reason
 
@@ -44,7 +44,11 @@ def add_misspelling(
         fix = True
         reason = ""
 
-    misspellings[key] = Misspelling(data, fix, reason)
+    misspellings[key] = Misspelling(
+        tuple(c.strip() for c in data.split(",")),
+        fix,
+        reason,
+    )
 
 
 def build_dict(
