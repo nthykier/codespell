@@ -43,7 +43,7 @@ from typing import (
 from ._version import (  # type: ignore[import-not-found]
     __version__ as VERSION,  # noqa: N812
 )
-from .spellchecker import Misspelling, build_dict
+from .spellchecker import Misspelling, Spellchecker
 from ._text_util import fix_case
 
 word_regex_def = r"[\w\-'’]+"  # noqa: RUF001
@@ -833,7 +833,7 @@ def parse_file(
     filename: str,
     colors: TermColors,
     summary: Optional[Summary],
-    misspellings: Dict[str, Misspelling],
+    spellchecker: Spellchecker,
     ignore_words_cased: Set[str],
     exclude_lines: Set[str],
     file_opener: FileOpener,
@@ -858,10 +858,11 @@ def parse_file(
                 if word in ignore_words_cased:
                     continue
                 lword = word.lower()
-                if lword not in misspellings:
+                misspelling = spellchecker.check_lower_cased_word(lword)
+                if misspelling is None:
                     continue
-                fix = misspellings[lword].fix
-                candidates = fix_case(word, misspellings[lword].candidates)
+                fix = misspelling.fix
+                candidates = fix_case(word, misspelling.candidates)
 
                 if summary and fix:
                     summary.update(lword)
@@ -870,7 +871,7 @@ def parse_file(
                 cwrongword = f"{colors.WWORD}{word}{colors.DISABLE}"
                 crightword = f"{colors.FWORD}{', '.join(candidates)}{colors.DISABLE}"
 
-                reason = misspellings[lword].reason
+                reason = misspelling.reason
                 if reason:
                     if options.quiet_level & QuietLevels.DISABLED_FIXES:
                         continue
@@ -942,7 +943,8 @@ def parse_file(
             if word in ignore_words_cased:
                 continue
             lword = word.lower()
-            if lword in misspellings and lword not in extra_words_to_ignore:
+            misspelling = spellchecker.check_lower_cased_word(lword)
+            if misspelling is not None and lword not in extra_words_to_ignore:
                 # Sometimes we find a 'misspelling' which is actually a valid word
                 # preceded by a string escape sequence.  Ignore such cases as
                 # they're usually false alarms; see issue #17 among others.
@@ -952,13 +954,13 @@ def parse_file(
                     and line[char_before_idx] == "\\"
                     # bell, backspace, formfeed, newline, carriage-return, tab, vtab.
                     and word.startswith(("a", "b", "f", "n", "r", "t", "v"))
-                    and lword[1:] not in misspellings
+                    and spellchecker.check_lower_cased_word(lword[1:]) is None
                 ):
                     continue
 
                 context_shown = False
-                fix = misspellings[lword].fix
-                candidates = fix_case(word, misspellings[lword].candidates)
+                fix = misspelling.fix
+                candidates = fix_case(word, misspelling.candidates)
 
                 if options.interactive and lword not in asked_for:
                     if context is not None:
@@ -967,7 +969,7 @@ def parse_file(
                     fix, candidates = ask_for_word_fix(
                         lines[i],
                         match,
-                        misspellings[lword],
+                        misspelling,
                         options.interactive,
                         colors=colors,
                     )
@@ -989,7 +991,7 @@ def parse_file(
                 if (
                     options.interactive & 2
                     and not fix
-                    and not misspellings[lword].reason
+                    and not misspelling.reason
                 ):
                     continue
 
@@ -998,7 +1000,7 @@ def parse_file(
                 cwrongword = f"{colors.WWORD}{word}{colors.DISABLE}"
                 crightword = f"{colors.FWORD}{', '.join(candidates)}{colors.DISABLE}"
 
-                reason = misspellings[lword].reason
+                reason = misspelling.reason
                 if reason:
                     if options.quiet_level & QuietLevels.DISABLED_FIXES:
                         continue
@@ -1170,9 +1172,9 @@ def main(*args: str) -> int:
                 parser.print_help()
                 return EX_USAGE
             use_dictionaries.append(dictionary)
-    misspellings: Dict[str, Misspelling] = {}
+    spellchecker = Spellchecker()
     for dictionary in use_dictionaries:
-        build_dict(dictionary, misspellings, ignore_words)
+        spellchecker.add_from_file(dictionary, ignore_words=ignore_words)
     colors = TermColors()
     if not options.colors:
         colors.disable()
@@ -1247,7 +1249,7 @@ def main(*args: str) -> int:
                         fname,
                         colors,
                         summary,
-                        misspellings,
+                        spellchecker,
                         ignore_words_cased,
                         exclude_lines,
                         file_opener,
@@ -1272,7 +1274,7 @@ def main(*args: str) -> int:
                 filename,
                 colors,
                 summary,
-                misspellings,
+                spellchecker,
                 ignore_words_cased,
                 exclude_lines,
                 file_opener,
