@@ -7,10 +7,10 @@ from typing import Any, Dict, Iterable, Optional, Set, Tuple
 
 import pytest
 
-from codespell_lib._codespell import (
+from codespell_lib._codespell import word_regex_def
+from codespell_lib.spellchecker import (
     _builtin_dictionaries,
     supported_languages,
-    word_regex_def,
 )
 
 spellers = {}

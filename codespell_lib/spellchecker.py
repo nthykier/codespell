@@ -15,7 +15,9 @@
 Copyright (C) 2010-2011  Lucas De Marchi <lucas.de.marchi@gmail.com>
 Copyright (C) 2011  ProFUSION embedded systems
 """
+
 import re
+import os
 from typing import Dict, Sequence, Container, Optional, Iterable, Callable
 
 # Pass all misspellings through this translation table to generate
@@ -24,6 +26,91 @@ alt_chars = (("'", "’"),)  # noqa: RUF001
 
 
 LineTokenizer = Callable[[str], Iterable[re.Match[str]]]
+
+
+supported_languages_en = ("en", "en_GB", "en_US", "en_CA", "en_AU")
+supported_languages = supported_languages_en
+
+# Users might want to link this file into /usr/local/bin, so we resolve the
+# symbolic link path to the real path if necessary.
+_data_root = os.path.join(os.path.dirname(os.path.realpath(__file__)), "data")
+_builtin_dictionaries = (
+    # name, desc, name, err in aspell, correction in aspell, \
+    # err dictionary array, rep dictionary array
+    # The arrays must contain the names of aspell dictionaries
+    # The aspell tests here aren't the ideal state, but the None's are
+    # realistic for obscure words
+    ("clear", "for unambiguous errors", "", False, None, supported_languages_en, None),
+    (
+        "rare",
+        "for rare (but valid) words that are likely to be errors",
+        "_rare",
+        None,
+        None,
+        None,
+        None,
+    ),
+    (
+        "informal",
+        "for making informal words more formal",
+        "_informal",
+        True,
+        True,
+        supported_languages_en,
+        supported_languages_en,
+    ),
+    (
+        "usage",
+        "for replacing phrasing with recommended terms",
+        "_usage",
+        None,
+        None,
+        None,
+        None,
+    ),
+    (
+        "code",
+        "for words from code and/or mathematics that are likely to be typos in other contexts (such as uint)",  # noqa: E501
+        "_code",
+        None,
+        None,
+        None,
+        None,
+    ),
+    (
+        "names",
+        "for valid proper names that might be typos",
+        "_names",
+        None,
+        None,
+        None,
+        None,
+    ),
+    (
+        "en-GB_to_en-US",
+        "for corrections from en-GB to en-US",
+        "_en-GB_to_en-US",
+        True,
+        True,
+        ("en_GB",),
+        ("en_US",),
+    ),
+)
+_builtin_default = "clear,rare"
+
+_builtin_default_as_tuple = tuple(_builtin_default.split(","))
+
+
+class UnknownBuiltinDictionaryError(ValueError):
+    def __init__(self, name: str) -> None:
+        super().__init__(f"Unknown built-in dictionary: {name}")
+
+
+class BuiltinDictionariesAlreadyLoadedError(TypeError):
+    def __init__(self) -> None:
+        super().__init__(
+            "load_builtin_dictionaries must not be called more than once",
+        )
 
 
 class Misspelling:
@@ -43,9 +130,42 @@ class DetectedMisspelling:
 
 
 class Spellchecker:
-    def __init__(self) -> None:
+    """The spellchecking dictionaries of codespell
+
+    The Spellchecker is responsible for spellchecking words or lines. It maintains state
+    for known typos, their corrections and known ignored words.
+
+        >>> import re
+        >>> s = Spellchecker()
+        >>> # Very simple tokenizer
+        >>> tokenizer = re.compile(r"[^ ]+").finditer
+        >>> line = "A touple tpyo but also correct words appear" # codespell:ignore
+        >>> issues = list(s.spellcheck_line(line, tokenizer))
+        >>> len(issues) == 2
+        >>> issues[0].word
+        'touple'
+        >>> list(issues[0].misspelling.candidates)
+        ['tuple', 'couple', 'topple', 'toupee']
+        >>> issues[0].misspelling.fix
+        False
+        >>> issues[1].word
+        'tpyo'
+        >>> list(issues[1].misspelling.candidates)
+        ['typo']
+        >>> issues[1].misspelling.fix
+        True
+    """
+
+    def __init__(
+        self,
+        *,
+        builtin_dictionaries: Optional[Sequence[str]] = _builtin_default_as_tuple,
+    ) -> None:
         self._misspellings: Dict[str, Misspelling] = {}
+        self._builtin_loaded = False
         self.ignore_words_cased: Container[str] = frozenset()
+        if builtin_dictionaries:
+            self.load_builtin_dictionaries(builtin_dictionaries)
 
     def spellcheck_line(
         self,
@@ -84,8 +204,67 @@ class Spellchecker:
         """
         return self._misspellings.get(word)
 
-    def add_from_file(self, filename: str, *, ignore_words: Container[str] = frozenset()) -> None:
+    def load_builtin_dictionaries(
+        self,
+        builtin_dictionaries: Iterable[str] = _builtin_default_as_tuple,
+        *,
+        ignore_words: Container[str] = frozenset(),
+    ) -> None:
+        """Load codespell builtin dictionaries (for manual dictionary load order)
+
+        This method enables you to load builtin dictionaries in a special order relative
+        to custom dictionaries. To use this method, you must ensure that the constructor
+        did *not* load any builtin dictionaries.
+
+           >>> s = Spellchecker(builtin_dictionaries=None)
+           >>> # A couple of s.load_dictionary_from_file(...) lines here
+           >>> s.load_builtin_dictionaries("clear")
+
+        This method updates the spellchecker to include any corrected listed
+        in the file. Load order is important. When multiple corrections are
+        loaded for the same typo, then the last loaded corrections for that
+        typo will be used.
+
+        :param builtin_dictionaries: Names of the codespell dictionaries to load
+        :param ignore_words: Words to ignore from this dictionary.
+        """
+        if self._builtin_loaded:
+            # It would work, but if you are doing manual load order, then probably
+            # you will want to be sure it you get it correct.
+            raise BuiltinDictionariesAlreadyLoadedError()
+        for name in sorted(set(builtin_dictionaries)):
+            self._load_builtin_dictionary(name, ignore_words=ignore_words)
+        self._builtin_loaded = True
+
+    def _load_builtin_dictionary(
+        self,
+        name: str,
+        *,
+        ignore_words: Container[str] = frozenset(),
+    ) -> None:
+        for builtin in _builtin_dictionaries:
+            if builtin[0] == name:
+                filename = os.path.join(_data_root, f"dictionary{builtin[2]}.txt")
+                self.load_dictionary_from_file(filename, ignore_words=ignore_words)
+                return
+        raise UnknownBuiltinDictionaryError(name)
+
+    def load_dictionary_from_file(
+        self,
+        filename: str,
+        *,
+        ignore_words: Container[str] = frozenset(),
+    ) -> None:
         """Parse a codespell dictionary
+
+        This is primarily useful for loading custom dictionaries not provided by
+        codespell. This is the API version of the `-D` / `--dictionary` command
+        line option except it only accept files (and not the special `-`).
+
+        This method updates the spellchecker to include any corrected listed in
+        the file. Load order is important. When multiple corrections are loaded
+        for the same typo, then the last loaded corrections for that typo will
+        be used.
 
         :param filename: The codespell dictionary file to parse
         :param ignore_words: Words to ignore from this dictionary.
